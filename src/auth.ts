@@ -1,22 +1,20 @@
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
+import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import Yandex from "next-auth/providers/yandex";
+import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import z from "zod";
-import { prisma } from "./lib/prisma";
-import bcrypt from "bcryptjs";
+import { prisma } from "@/lib/prisma";
+import { z } from "zod";
 
 const credentialsSchema = z.object({
-  email: z.email(),
+  email: z.string().email(),
   password: z.string().min(6).max(32),
 });
 
-type User = z.infer<typeof credentialsSchema>;
-
-export const { handlers, signIn, signOut, auth } = NextAuth({
+export const authConfig = {
+  adapter: PrismaAdapter(prisma),
   session: { strategy: "jwt" },
-  adapter: PrismaAdapter({}),
+
   providers: [
     Yandex,
     Google,
@@ -27,27 +25,37 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(raw) {
-        const { email, password } = raw as User;
         const parsed = credentialsSchema.safeParse(raw);
+        if (!parsed.success) return null;
+        const { email, password } = parsed.data;
 
-        if (!parsed.success) {
-          return null;
-        }
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user || !user.hashPassword) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email },
-        });
-        if (!user) return null;
+        // ДИНАМИЧЕСКИЙ импорт bcryptjs — чтобы лишний код не утягивался куда не надо
+        const { compare } = await import("bcryptjs");
+        const ok = await compare(password, user.hashPassword);
+        if (!ok) return null;
 
-        const isEqualPassword = await bcrypt.compare(password, user.hashPassword);
-        if (!isEqualPassword) return null;
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-        };
+        return { id: user.id, email: user.email, name: user.name ?? undefined };
       },
     }),
   ],
-});
+
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        token.userId = (user as any).id;
+        token.name = user.name;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (token?.userId) (session.user as any).id = String(token.userId);
+      if (token?.name) session.user.name = token.name as string;
+      return session;
+    },
+  },
+} satisfies NextAuthConfig;
+
+export const { handlers, signIn, signOut, auth } = NextAuth(authConfig);
