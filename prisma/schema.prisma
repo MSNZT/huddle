@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+model User {
+  id String @id @default(cuid())
+  email String @unique
+  hashPassword String
+  name String
+
+  events Event[]
+
+  createAt DateTime
+  updatedAt DateTime @updatedAt
+  @@map("user")
+}
+
+
+model Event {
+  id String @id @default(cuid())
+  title String
+  description String
+
+  dateStart DateTime
+  dateEnd DateTime?
+
+  status StatusEvent
+
+  user User @relation(fields: [userId], references: [id])
+  userId String @unique
+
+  createAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@map("event")
+}
+
+enum StatusEvent {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
